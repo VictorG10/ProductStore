@@ -5,6 +5,7 @@ import helmet from "helmet";
 import cors from "cors";
 import products from "./routes/products.routes.js";
 import { initDB } from "./config/db.js";
+import { aj } from "./libs/arcjet.js";
 
 const PORT = process.env.PORT || 8081;
 
@@ -17,6 +18,43 @@ app.use(morgan("dev"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cors());
+
+// apply arcjet rate limiting to all routes
+app.use(async (req, res, next) => {
+  try {
+    const decision = await aj.protect(req, { requested: 1 });
+
+    if (decision.isDenied()) {
+      if (decision.reason.isRateLimit()) {
+        res.status(429).json({
+          error: "Too Many Request ",
+        });
+      } else if (decision.reason.isBot()) {
+        res.status(403).json({
+          error: "Bot access denied",
+        });
+      } else {
+        res.status(403).json({ error: "Forbidden" });
+      }
+      return;
+    }
+
+    // check for spoofed bots
+    if (
+      decision.results.some(
+        (result) => result.reason.isBot() && result.reason.isSpoofed()
+      )
+    ) {
+      res.status(403).json({ error: "Spoofed bot detected" });
+      return;
+    }
+
+    next();
+  } catch (error) {
+    console.error("Arcjet error", error);
+    next(error);
+  }
+});
 
 // routes
 app.get("/", (req, res) => {
